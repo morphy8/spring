@@ -54,11 +54,25 @@ CR_REG_METADATA(CHoverAirMoveType, (
 
 
 
-static bool IsUnitBusy(const CUnit* u) {
+static bool UnitIsBusy(const CCommandAI* cai) {
 	// queued move-commands (or active build/repair/etc-commands) mean unit has to stay airborne
-	const auto& cai = u->commandAI;
 	return (cai->inCommand || cai->HasMoreMoveCommands(false));
 }
+
+static bool UnitHasLoadCmd(const CCommandAI* cai) {
+	const auto& que = cai->commandQue;
+	const auto& cmd = (que.empty())? Command(CMD_STOP): que.front();
+
+	// NOTE:
+	//   CMD_LOAD_ONTO is not tested here, HAMT is rarely a transport*ee*
+	//   and only transport*er*s can be given the CMD_LOAD_UNITS command
+	return (cmd.GetID() == CMD_LOAD_UNITS);
+}
+
+static bool UnitIsBusy(const CUnit* u) { return (UnitIsBusy(u->commandAI)); }
+static bool UnitHasLoadCmd(const CUnit* u) { return (UnitHasLoadCmd(u->commandAI)); }
+
+
 
 CHoverAirMoveType::CHoverAirMoveType(CUnit* owner) :
 	AAirMoveType(owner),
@@ -68,13 +82,13 @@ CHoverAirMoveType::CHoverAirMoveType(CUnit* owner) :
 	airStrafe(owner != nullptr ? owner->unitDef->airStrafe : false),
 	wantToStop(false),
 
-	goalDistance(1),
+	goalDistance(1.0f),
 
 	// we want to take off in direction of factory facing
-	currentBank(0),
-	currentPitch(0),
+	currentBank(0.0f),
+	currentPitch(0.0f),
 
-	turnRate(1),
+	turnRate(1.0f),
 	maxDrift(1.0f),
 	maxTurnAngle(math::cos((owner != nullptr ? owner->unitDef->turnInPlaceAngleLimit : 0.0f) * math::DEG_TO_RAD) * -1.0f),
 
@@ -220,9 +234,7 @@ void CHoverAirMoveType::StartMoving(float3 pos, float goalRadius)
 			SetState(AIRCRAFT_TAKEOFF);
 			break;
 		case AIRCRAFT_FLYING:
-			if (flyState != FLY_CRUISING) {
-				flyState = FLY_CRUISING;
-			}
+			flyState = FLY_CRUISING;
 			break;
 		case AIRCRAFT_LANDING:
 			SetState(AIRCRAFT_TAKEOFF);
@@ -250,7 +262,7 @@ void CHoverAirMoveType::KeepPointingTo(float3 pos, float distance, bool aggressi
 	wantedHeight = orgWantedHeight;
 
 	// close in a little to avoid the command AI to override the pos constantly
-	distance -= 15;
+	distance -= 15.0f;
 
 	// Ignore the exact same order
 	if ((aircraftState == AIRCRAFT_FLYING) && (flyState == FLY_CIRCLING || flyState == FLY_ATTACKING) && ((circlingPos - pos).SqLength2D() < 64) && (goalDistance == distance))
@@ -280,12 +292,13 @@ void CHoverAirMoveType::ExecuteStop()
 {
 	wantToStop = false;
 	wantedSpeed = ZeroVector;
+
 	SetGoal(owner->pos);
 	ClearLandingPos();
 
 	switch (aircraftState) {
 		case AIRCRAFT_TAKEOFF: {
-			if (CanLand(IsUnitBusy(owner))) {
+			if (CanLand(UnitIsBusy(owner))) {
 				SetState(AIRCRAFT_LANDING);
 				// trick to land directly
 				waitCounter = GAME_SPEED;
@@ -293,8 +306,7 @@ void CHoverAirMoveType::ExecuteStop()
 			}
 		} // fall through
 		case AIRCRAFT_FLYING: {
-
-			if (CanLand(IsUnitBusy(owner))) {
+			if (CanLand(UnitIsBusy(owner))) {
 				SetState(AIRCRAFT_LANDING);
 			} else {
 				SetState(AIRCRAFT_HOVERING);
@@ -302,7 +314,7 @@ void CHoverAirMoveType::ExecuteStop()
 		} break;
 
 		case AIRCRAFT_LANDING: {
-			if (!CanLand(IsUnitBusy(owner)))
+			if (!CanLand(UnitIsBusy(owner)))
 				SetState(AIRCRAFT_HOVERING);
 
 		} break;
@@ -310,7 +322,7 @@ void CHoverAirMoveType::ExecuteStop()
 		case AIRCRAFT_CRASHING: {} break;
 
 		case AIRCRAFT_HOVERING: {
-			if (CanLand(IsUnitBusy(owner))) {
+			if (CanLand(UnitIsBusy(owner))) {
 				// land immediately, otherwise keep hovering
 				SetState(AIRCRAFT_LANDING);
 				waitCounter = GAME_SPEED;
@@ -408,9 +420,11 @@ void CHoverAirMoveType::UpdateHovering()
 	randomWind.x = randomWind.x * 0.9f + (gsRNG.NextFloat() - 0.5f) * 0.5f;
 	randomWind.z = randomWind.z * 0.9f + (gsRNG.NextFloat() - 0.5f) * 0.5f;
 
-	// randomly drift (but not too far from goal-position)
-	wantedSpeed = (randomWind * math::fabs(owner->unitDef->dlHoverFactor) * 0.5f);
-	wantedSpeed += (smoothstep(0.0f, 20.0f * 20.0f, (goalPos - owner->pos)) * (goalPos - owner->pos));
+	// randomly drift (but not too far from goal-position; a larger
+	// deviation causes a larger wantedSpeed back in its direction)
+	// when not picking up a transportee
+	wantedSpeed = (randomWind * math::fabs(owner->unitDef->dlHoverFactor) * 0.5f * (1 - UnitHasLoadCmd(owner)));
+	wantedSpeed += (smoothstep(0.0f, 20.0f * 20.0f, float3::fabs(goalPos - owner->pos)) * (goalPos - owner->pos));
 
 	UpdateAirPhysics();
 	#endif
@@ -446,23 +460,19 @@ void CHoverAirMoveType::UpdateFlying()
 	if (closeToGoal) {
 		switch (flyState) {
 			case FLY_CRUISING: {
-				const auto& cmdQue = owner->commandAI->commandQue;
-				const int topCmdID = cmdQue.empty() ? 0 : cmdQue.front().GetID();
-
-				// NOTE: should CMD_LOAD_ONTO be here?
 				const bool isTransporter = owner->unitDef->IsTransportUnit();
-				const bool hasLoadCmds = isTransporter && (topCmdID == CMD_LOAD_ONTO || topCmdID == CMD_LOAD_UNITS);
+				const bool hasLoadCmds = isTransporter && UnitHasLoadCmd(owner);
+
 				// [?] transport aircraft need some time to detect that they can pickup
 				const bool canLoad = isTransporter && (++waitCounter < ((GAME_SPEED << 1) - 5));
-				const bool isBusy = IsUnitBusy(owner);
+				const bool isBusy = UnitIsBusy(owner);
 
 				if (!CanLand(isBusy) || (canLoad && hasLoadCmds)) {
 					wantedSpeed = ZeroVector;
 
 					if (isTransporter) {
-						if (waitCounter > (GAME_SPEED << 1)) {
+						if (waitCounter > (GAME_SPEED << 1))
 							wantedHeight = orgWantedHeight;
-						}
 
 						SetState(AIRCRAFT_HOVERING);
 					} else {
@@ -552,7 +562,7 @@ void CHoverAirMoveType::UpdateFlying()
 		wantedSpeed = (goalVec / goalDist) * goalSpeed;
 	} else {
 		// switch to hovering (if !CanLand()))
-		if (!IsUnitBusy(owner)) {
+		if (!UnitIsBusy(owner)) {
 			ExecuteStop();
 		} else {
 			wantedSpeed = ZeroVector;
@@ -667,34 +677,34 @@ void CHoverAirMoveType::UpdateHeading()
 
 void CHoverAirMoveType::UpdateBanking(bool noBanking)
 {
-	if (aircraftState != AIRCRAFT_FLYING && aircraftState != AIRCRAFT_HOVERING)
+	// need to allow LANDING so (autoLand=true) aircraft reset their
+	// pitch naturally after attacking ground and being told to stop
+	if (aircraftState != AIRCRAFT_FLYING && aircraftState != AIRCRAFT_HOVERING && aircraftState != AIRCRAFT_LANDING)
 		return;
-
-	if (!owner->upright) {
-		float wantedPitch = 0.0f;
-
-		if (aircraftState == AIRCRAFT_FLYING && flyState == FLY_ATTACKING && circlingPos.y < owner->pos.y) {
-			wantedPitch = (circlingPos.y - owner->pos.y) / circlingPos.distance(owner->pos);
-		}
-
-		currentPitch = mix(currentPitch, wantedPitch, 0.05f);
-	}
 
 	// always positive
 	const float bankLimit = std::min(1.0f, goalPos.SqDistance2D(owner->pos) * Square(0.15f));
+
 	float wantedBank = 0.0f;
+	float wantedPitch = 0.0f;
 
 	SyncedFloat3& frontDir = owner->frontdir;
 	SyncedFloat3& upDir = owner->updir;
 	SyncedFloat3& rightDir3D = owner->rightdir;
 	SyncedFloat3  rightDir2D;
 
-	// pitching does not affect rightdir, but...
+	// pitching does not affect rightdir, but we want a flat right-vector to calculate wantedBank
 	frontDir.y = currentPitch;
 	frontDir.Normalize();
 
-	// we want a flat right-vector to calculate wantedBank
 	rightDir2D = frontDir.cross(UpVector);
+
+
+	if (!owner->upright)
+		wantedPitch = (circlingPos.y - owner->pos.y) / circlingPos.distance(owner->pos);
+
+	wantedPitch *= (aircraftState == AIRCRAFT_FLYING && flyState == FLY_ATTACKING && circlingPos.y != owner->pos.y);
+	currentPitch = mix(currentPitch, wantedPitch, 0.05f);
 
 	if (!noBanking && bankingAllowed)
 		wantedBank = rightDir2D.dot(deltaSpeed) / accRate * 0.5f;
@@ -715,17 +725,16 @@ void CHoverAirMoveType::UpdateBanking(bool noBanking)
 	rightDir3D = frontDir.cross(upDir);
 
 	// NOTE:
-	//     heading might not be fully in sync with frontDir due to the
-	//     vector<-->heading mapping not being 1:1 (such that heading
-	//     != GetHeadingFromVector(frontDir)), therefore this call can
-	//     cause owner->heading to change --> unwanted if forceHeading
+	//   heading might not be fully in sync with frontDir due to the
+	//   vector<-->heading mapping not being 1:1 (such that heading
+	//   != GetHeadingFromVector(frontDir)), therefore this call can
+	//   cause owner->heading to change --> unwanted if forceHeading
 	//
-	//     it is "safe" to skip because only frontDir.y is manipulated
-	//     above so its xz-direction does not change, but the problem
-	//     should really be fixed elsewhere
-	if (!forceHeading) {
+	//   it is "safe" to skip because only frontDir.y is manipulated
+	//   above so its xz-direction does not change, but the problem
+	//   should really be fixed elsewhere
+	if (!forceHeading)
 		owner->SetHeadingFromDirection();
-	}
 
 	owner->UpdateMidAndAimPos();
 }
@@ -921,9 +930,8 @@ bool CHoverAirMoveType::Update()
 			wantedSpeed.Normalize();
 			wantedSpeed *= maxSpeed;
 
-			if (!nextPos.IsInBounds()) {
+			if (!nextPos.IsInBounds())
 				owner->SetVelocityAndSpeed(ZeroVector);
-			}
 
 			UpdateAirPhysics();
 			wantedHeading = GetHeadingFromVector(flatForward.x, flatForward.z);
@@ -973,7 +981,7 @@ bool CHoverAirMoveType::Update()
 
 	// Turn and bank and move; update dirs
 	UpdateHeading();
-	UpdateBanking(aircraftState == AIRCRAFT_HOVERING);
+	UpdateBanking(aircraftState == AIRCRAFT_HOVERING || aircraftState == AIRCRAFT_LANDING);
 
 	return (HandleCollisions(collide && !owner->beingBuilt && (aircraftState != AIRCRAFT_TAKEOFF)));
 }

@@ -198,7 +198,7 @@ public:
 		int piece;
 	};
 
-	void SetSoloBuilder(CUnit* builder);
+	bool SetSoloBuilder(CUnit* builder, const UnitDef* buildeeDef);
 	void SetLastAttacker(CUnit* attacker);
 
 	void SetTransporter(CUnit* trans) { transporter = trans; }
@@ -216,6 +216,7 @@ public:
 	short GetTransporteeWantedHeading(const CUnit* unit) const;
 
 public:
+	void KilledScriptFinished(int wreckLevel) { deathScriptFinished = true; delayedWreckLevel = wreckLevel; }
 	void ForcedKillUnit(CUnit* attacker, bool selfDestruct, bool reclaimed, bool showDeathSequence = true);
 	virtual void KillUnit(CUnit* attacker, bool selfDestruct, bool reclaimed, bool showDeathSequence = true);
 	virtual void IncomingMissile(CMissileProjectile* missile);

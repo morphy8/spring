@@ -43,8 +43,9 @@ struct TriTreeNode
 	{}
 
 	// all non-leaf nodes have both children, so just check for one
-	bool IsLeaf() const { return (LeftChild == nullptr); }
-	bool IsBranch() const { return (RightChild != nullptr); }
+	bool IsValid() const { return ((LeftChild == nullptr && RightChild == nullptr) || (LeftChild != nullptr && RightChild != nullptr)); }
+	bool IsLeaf() const { assert(IsValid()); return (LeftChild == nullptr); }
+	bool IsBranch() const { assert(IsValid()); return (RightChild != nullptr); }
 
 	TriTreeNode* LeftChild;
 	TriTreeNode* RightChild;
@@ -166,9 +167,11 @@ private:
 
 	CSMFGroundDrawer* smfGroundDrawer;
 
+	// pool used during Tessellate; each invoked Split allocates from this
+	CTriNodePool* curTriPool;
+
 	// which variance we are currently using [only valid during the Tessellate and ComputeVariance passes]
 	float* currentVariance;
-	CTriNodePool* currentPool;
 
 	// does the variance-tree need to be recalculated for this Patch?
 	bool isDirty;

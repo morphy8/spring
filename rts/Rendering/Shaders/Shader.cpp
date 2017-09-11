@@ -242,7 +242,7 @@ namespace Shader {
 		res->log   = glslGetLog(res->id);
 
 		if (!res->valid) {
-			const std::string& name = srcFile.find("void main()") ? "unknown" : srcFile;
+			const std::string& name = srcFile.find("void main()") != std::string::npos ? "unknown" : srcFile;
 			LOG_L(L_WARNING, "[GLSL-SO::%s] shader-object name: %s, compile-log:\n%s\n", __FUNCTION__, name.c_str(), res->log.c_str());
 			LOG_L(L_WARNING, "\n%s%s%s%s%s%s%s", sources[0], sources[1], sources[2], sources[3], sources[4], sources[5], sources[6]);
 		}
@@ -311,15 +311,6 @@ namespace Shader {
 
 		UniformState* us = &(it.first->second);
 		us->SetLocation(GetUniformLoc(name));
-
-	#if DEBUG
-		if (us->IsLocationValid())
-			us->SetType(GetUniformType(us->GetLocation()));
-
-		// make sure hash is unique
-		for (const auto us2: uniformStates)
-			assert(us2.first != hash || us2.second.GetName() == name);
-	#endif
 
 		return us;
 	}
@@ -588,10 +579,11 @@ namespace Shader {
 			glDeleteProgram(oldProgID);
 	}
 
-	int GLSLProgramObject::GetUniformType(const int loc) {
+	int GLSLProgramObject::GetUniformType(const int idx) {
 		GLint size = 0;
 		GLenum type = 0;
-		glGetActiveUniform(objID, loc, 0, nullptr, &size, &type, nullptr);
+		// NB: idx can not be a *location* returned by glGetUniformLoc except on Nvidia
+		glGetActiveUniform(objID, idx, 0, nullptr, &size, &type, nullptr);
 		assert(size == 1); // arrays aren't handled yet
 		return type;
 	}

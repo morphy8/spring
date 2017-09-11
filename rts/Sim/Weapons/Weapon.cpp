@@ -302,18 +302,15 @@ void CWeapon::UpdateAim()
 	const float3 worldTargetDir = (currentTargetPos - owner->pos).SafeNormalize();
 	const float3 worldMainDir = owner->GetObjectSpaceVec(mainDir);
 	const bool targetAngleConstraint = CheckTargetAngleConstraint(worldTargetDir, worldMainDir);
-	if (angleGood && !targetAngleConstraint) {
-		// weapon finished a previously started AimWeapon thread and wants to
-		// fire, but target is no longer within contraints --> wait for re-aim
-		angleGood = false;
-	}
-	if (onlyForward && targetAngleConstraint) {
-		// NOTE:
-		//   this should not need to be here, but many legacy scripts do not
-		//   seem to define Aim*Ary in COB for units with onlyForward weapons
-		//   (so angleGood is never set to true) -- REMOVE AFTER 90.0
-		angleGood = true;
-	}
+
+	// weapon finished a previously started AimWeapon thread and wants to
+	// fire, but target is no longer within contraints --> wait for re-aim
+	angleGood &= targetAngleConstraint;
+	// NOTE:
+	//   this should not need to be here, but many legacy scripts do not
+	//   seem to define Aim*Ary in COB for units with onlyForward weapons
+	//   (so angleGood is never set to true) -- REMOVE AFTER 90.0
+	angleGood |= (onlyForward && targetAngleConstraint);
 
 	// reaim weapon when needed
 	ReAimWeapon();
@@ -346,9 +343,8 @@ void CWeapon::ReAimWeapon()
 	if (!reAim)
 		return;
 
-	// if we should block further fireing till AimWeapon() has finished
-	if (!weaponDef->allowNonBlockingAim)
-		angleGood = false;
+	// if we should block further firing until AimWeapon() has finished
+	angleGood &= (weaponDef->allowNonBlockingAim);
 
 	lastRequestedDir = wantedDir;
 	lastRequest = gs->frameNum;
@@ -356,8 +352,8 @@ void CWeapon::ReAimWeapon()
 	const float heading = GetHeadingFromVectorF(wantedDir.x, wantedDir.z);
 	const float pitch = math::asin(Clamp(wantedDir.dot(owner->updir), -1.0f, 1.0f));
 
-	// for COB, this sets <angleGood> to return value of AimWeapon when finished,
-	// for LUS, there exists a callout to set the <angleGood> member directly.
+	// for COB, this sets <angleGood> to AimWeapon's return value when finished
+	// for LUS, there exists a callout to set the <angleGood> member directly
 	// FIXME: convert CSolidObject::heading to radians too.
 	owner->script->AimWeapon(weaponNum, ClampRad(heading - owner->heading * TAANG2RAD), pitch);
 }
@@ -963,23 +959,33 @@ bool CWeapon::HaveFreeLineOfFire(const float3 srcPos, const float3 tgtPos, const
 	if (length == 0.0f)
 		return true;
 
-	// ground check
-	if ((avoidFlags & Collision::NOGROUND) == 0) {
-		// NOTE:
-		//   ballistic weapons (Cannon / Missile icw. trajectoryHeight) do not call this,
-		//   they rely on TrajectoryGroundCol with an external check for the NOGROUND flag
-		CUnit* unit = nullptr;
-		CFeature* feature = nullptr;
+	CUnit* unit = nullptr;
+	CFeature* feature = nullptr;
 
-		const float gdst = TraceRay::TraceRay(srcPos, tgtDir, length, ~Collision::NOGROUND, owner, unit, feature);
-		const float3 gpos = srcPos + tgtDir * gdst;
+	// ground check
+	// NOTE:
+	//   ballistic weapons (Cannon / Missile icw. trajectoryHeight) override this part,
+	//   they rely on TrajectoryGroundCol with an external check for the NOGROUND flag
+	if ((avoidFlags & Collision::NOGROUND) == 0) {
+		const float gndDst = TraceRay::TraceRay(srcPos, tgtDir, length, ~Collision::NOGROUND, owner, unit, feature);
+		const float tgtDst = tgtPos.SqDistance(srcPos + tgtDir * gndDst);
 
 		// true iff ground does not block the ray of length <length> from <srcPos> along <tgtDir>
-		if ((gdst > 0.0f) && (gpos.SqDistance(tgtPos) > Square(damages->damageAreaOfEffect)))
+		if ((gndDst > 0.0f) && (tgtDst > Square(damages->damageAreaOfEffect)))
 			return false;
+
+		unit = nullptr;
+		feature = nullptr;
 	}
 
 	// friendly, neutral & feature check
+	// for projectiles that do not or barely spread out with distance
+	// this reduces to a ray intersection, which is also more accurate
+	// must nerf TraceRay since it scans for enemies and ground if the
+	// flags are omitted, unlike TestCone which is restricted to A/N/F
+	if (spread < 0.001f)
+		return (TraceRay::TraceRay(srcPos, tgtDir, length, avoidFlags | Collision::NOENEMIES | Collision::NOGROUND, owner, unit, feature) >= length);
+
 	return (!TraceRay::TestCone(srcPos, tgtDir, length, spread, owner->allyteam, avoidFlags, owner));
 }
 
@@ -1121,9 +1127,9 @@ ProjectileParams CWeapon::GetProjectileParams()
 	params.weaponDef = weaponDef;
 
 	switch (currentTarget.type) {
-		case Target_None: { } break;
-		case Target_Unit: { params.target = currentTarget.unit; } break;
-		case Target_Pos:  { } break;
+		case Target_None     : {                                          } break;
+		case Target_Unit     : { params.target = currentTarget.unit;      } break;
+		case Target_Pos      : {                                          } break;
 		case Target_Intercept: { params.target = currentTarget.intercept; } break;
 	}
 

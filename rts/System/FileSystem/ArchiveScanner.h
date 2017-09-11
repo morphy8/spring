@@ -133,9 +133,10 @@ public:
 	unsigned int GetArchiveCompleteChecksum(const std::string& name);
 
 	/// like GetArchiveCompleteChecksum, throws exception if mismatch
-	void CheckArchive(const std::string& name, unsigned checksum);
+	void CheckArchive(const std::string& name, unsigned int hostChecksum, unsigned int& localChecksum);
 	void ScanArchive(const std::string& fullName, bool checksum = false);
 	void ScanAllDirs();
+	void Reload();
 
 	std::string ArchiveFromName(const std::string& s) const;
 	std::string NameFromArchive(const std::string& s) const;

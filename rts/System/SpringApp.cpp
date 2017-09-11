@@ -44,10 +44,10 @@
 #include "Rendering/GlobalRendering.h"
 #include "Rendering/Fonts/glFont.h"
 #include "Rendering/GL/FBO.h"
+#include "Rendering/Textures/Bitmap.h"
 #include "Rendering/Textures/NamedTextures.h"
 #include "Rendering/Textures/TextureAtlas.h"
-#include "Sim/Misc/DefinitionTag.h"
-#include "Sim/Misc/GlobalConstants.h"
+#include "Sim/Misc/DefinitionTag.h" // DefType
 #include "Sim/Misc/GlobalSynced.h"
 #include "Sim/Misc/ModInfo.h"
 #include "Sim/Projectiles/ExplosionGenerator.h"
@@ -66,6 +66,7 @@
 #include "System/creg/creg_runtime_tests.h"
 #include "System/FileSystem/ArchiveScanner.h"
 #include "System/FileSystem/DataDirLocater.h"
+#include "System/FileSystem/DataDirsAccess.h"
 #include "System/FileSystem/FileHandler.h"
 #include "System/FileSystem/FileSystem.h"
 #include "System/FileSystem/FileSystemInitializer.h"
@@ -107,6 +108,7 @@ CONFIG(float, SmallFontOutlineWeight).defaultValue(10.0f).description("see FontO
 
 CONFIG(std::string, name).defaultValue(UnnamedPlayerName).description("Sets your name in the game. Since this is overridden by lobbies with your lobby username when playing, it usually only comes up when viewing replays or starting the engine directly for testing purposes.");
 CONFIG(std::string, DefaultStartScript).defaultValue("").description("filename of script.txt to use when no command line parameters are specified.");
+CONFIG(std::string, SplashScreenDir).defaultValue(".");
 
 
 
@@ -144,7 +146,80 @@ DEFINE_bool     (oldmenu,                                  false, "Start the old
 int spring::exitCode = spring::EXIT_CODE_SUCCESS;
 
 static unsigned int numReloads = 0;
-static unsigned int numShutDowns = 0;
+static unsigned int numKilleds = 0;
+
+
+
+// initialize basic systems for command line help / output
+static void ConsolePrintInitialize(const std::string& configSource, bool safemode)
+{
+	spring_clock::PushTickRate(false);
+	spring_time::setstarttime(spring_time::gettime(true));
+
+	LOG_DISABLE();
+	FileSystemInitializer::PreInitializeConfigHandler(configSource, safemode);
+	FileSystemInitializer::InitializeLogOutput();
+	LOG_ENABLE();
+}
+
+#ifndef HEADLESS
+static void ShowSplashScreen(const std::string& splashScreenFile)
+{
+	CVertexArray* va = GetVertexArray();
+	CBitmap bmp;
+
+	// passing an empty name would cause bmp FileHandler to also
+	// search inside the VFS since its default mode is RAW_FIRST
+	if (splashScreenFile.empty() || !bmp.Load(splashScreenFile))
+		bmp.AllocDummy({0, 0, 0, 0});
+
+	constexpr const char* fmtStrs[3] = {
+		"[Initializing Virtual File System]",
+		"* archives scanned: %u",
+		"* scantime elapsed: %.1fms",
+	};
+
+	const unsigned int splashTex = bmp.CreateTexture();
+	const unsigned int fontFlags = FONT_NORM | FONT_SCALE;
+
+	const float4 color = {1.0f, 1.0f, 1.0f, 1.0f};
+	const float4 coors = {0.5f, 0.1f, 0.8f, 0.04f};
+
+	const float textWidth = font->GetTextWidth(fmtStrs[0]);
+	const float normWidth = textWidth * globalRendering->pixelX * font->GetSize() * coors.z;
+
+	glPushAttrib(GL_ENABLE_BIT);
+	glEnable(GL_TEXTURE_2D);
+
+	for (spring_time t0 = spring_now(), t1 = t0; !FileSystemInitializer::Initialized(); t1 = spring_now()) {
+		glClear(GL_COLOR_BUFFER_BIT);
+
+		glBindTexture(GL_TEXTURE_2D, splashTex);
+		va->Initialize();
+		va->AddVertex2dT({ZeroVector.x, 1.0f - ZeroVector.y}, {0.0f, 0.0f});
+		va->AddVertex2dT({  UpVector.x, 1.0f -   UpVector.y}, {0.0f, 1.0f});
+		va->AddVertex2dT({  XYVector.x, 1.0f -   XYVector.y}, {1.0f, 1.0f});
+		va->AddVertex2dT({ RgtVector.x, 1.0f -  RgtVector.y}, {1.0f, 0.0f});
+		va->DrawArray2dT(GL_QUADS);
+
+		font->Begin();
+		font->SetTextColor(color.x, color.y, color.z, color.w);
+		font->glFormat(coors.x - normWidth * 0.500f, coors.y                           , coors.z, fontFlags, fmtStrs[0]);
+		font->glFormat(coors.x - normWidth * 0.475f, coors.y - coors.w * coors.z * 1.0f, coors.z, fontFlags, fmtStrs[1], CArchiveScanner::GetNumScannedArchives());
+		font->glFormat(coors.x - normWidth * 0.475f, coors.y - coors.w * coors.z * 2.0f, coors.z, fontFlags, fmtStrs[2], (t1 - t0).toMilliSecsf());
+		font->End();
+
+		globalRendering->SwapBuffers(true, true);
+
+		// prevent WM's from assuming the window is unresponsive and
+		// (in recent versions of Windows) generating a kill-request
+		SDL_PollEvent(nullptr);
+	}
+
+	glPopAttrib();
+	glDeleteTextures(1, &splashTex);
+}
+#endif
 
 
 
@@ -162,12 +237,20 @@ SpringApp::SpringApp(int argc, char** argv)
 	gflags::ParseCommandLineFlags(&argc, &argv, true);
 	ParseCmdLine(argc, argv);
 
+	FileSystemInitializer::InitializeLogOutput();
+
 	spring_clock::PushTickRate(configHandler->GetBool("UseHighResTimer"));
 	// set the Spring "epoch" to be whatever value the first
 	// call to gettime() returns, should not be 0 (can safely
 	// be done before SDL_Init, we are not using SDL_GetTicks
 	// as our clock anymore)
 	spring_time::setstarttime(spring_time::gettime(true));
+
+	CLogOutput::LogConfigInfo();
+	CLogOutput::LogSystemInfo();
+
+	// gu does not exist yet, pre-seed for ShowSplashScreen
+	guRNG.Seed(CGlobalUnsyncedRNG::rng_val_type(&argc));
 }
 
 /**
@@ -185,12 +268,6 @@ SpringApp::~SpringApp()
  */
 bool SpringApp::Init()
 {
-	assert(configHandler != nullptr);
-	FileSystemInitializer::InitializeLogOutput();
-
-	CLogOutput::LogConfigInfo();
-	CLogOutput::LogSystemInfo();
-
 	CMyMath::Init();
 	LuaMemPool::InitStatic(configHandler->GetBool("UseLuaMemPools"));
 
@@ -268,7 +345,7 @@ bool SpringApp::InitPlatformLibs()
 	// MUST run before any other X11 call (including
 	// those by SDL) to make calls to X11 threadsafe
 	if (!XInitThreads()) {
-		LOG_L(L_FATAL, "[%s] Xlib is not threadsafe", __func__);
+		LOG_L(L_FATAL, "[SpringApp::%s] Xlib is not threadsafe", __func__);
 		return false;
 	}
 #endif
@@ -280,7 +357,7 @@ bool SpringApp::InitPlatformLibs()
 		const UINT oldErrorMode = SetErrorMode(SEM_FAILCRITICALERRORS);
 
 		if (LoadLibrary("gdbmacros.dll"))
-			LOG_L(L_DEBUG, "[%s] QTCreator's gdbmacros.dll loaded", __func__);
+			LOG_L(L_DEBUG, "[SpringApp::%s] QTCreator's gdbmacros.dll loaded", __func__);
 
 		SetErrorMode(oldErrorMode);
 	}
@@ -300,29 +377,19 @@ bool SpringApp::InitFileSystem()
 	#ifndef HEADLESS
 	// threaded initialization s.t. the window gets CPU time
 	// FileSystem is mostly self-contained, don't need locks
+	// (at this point neither the platform CWD nor data-dirs
+	// have been set yet by FSI, can only use absolute paths)
+	const std::string cwd = std::move(FileSystem::EnsurePathSepAtEnd(FileSystemAbstraction::GetCwd()));
+	const std::string ssd = std::move(FileSystem::EnsurePathSepAtEnd(configHandler->GetString("SplashScreenDir")));
+
+	std::vector<std::string> splashScreenFiles(dataDirsAccess.FindFiles(FileSystem::IsAbsolutePath(ssd)? ssd: cwd + ssd, "*.{png,jpg}", 0));
 	spring::thread fsInitThread(FileSystemInitializer::InitializeThr, &ret);
 
-
-	const float4 color = {1.0f, 0.0f, 0.0f, 1.0f};
-	const float4 coors = {0.5f, 0.5f, 25.0f, 0.04f};
-
-	for (spring_time t0 = spring_now(), t1 = t0; !FileSystemInitializer::DoneIniting(); t1 = spring_now()) {
-		glClear(GL_COLOR_BUFFER_BIT);
-
-		font->Begin();
-		font->SetTextColor(color.x, color.y, color.z, color.w);
-		font->glFormat(coors.x - 0.125f, coors.y                 , coors.z, FONT_NORM, "[Initializing Virtual File System]");
-		font->glFormat(coors.x - 0.120f, coors.y - coors.w * 1.0f, coors.z, FONT_NORM, "* archives scanned: %u", CArchiveScanner::GetNumScannedArchives());
-		font->glFormat(coors.x - 0.120f, coors.y - coors.w * 2.0f, coors.z, FONT_NORM, "* scantime elapsed: %.1fms", (t1 - t0).toMilliSecsf());
-		font->End();
-
-		globalRendering->SwapBuffers(true, true);
-
-		// prevent WM's from assuming the window is unresponsive and
-		// (in recent versions of Windows) generating a kill-request
-		SDL_PollEvent(nullptr);
+	if (!splashScreenFiles.empty()) {
+		ShowSplashScreen(splashScreenFiles[ guRNG.NextInt(splashScreenFiles.size()) ]);
+	} else {
+		ShowSplashScreen("");
 	}
-
 
 	fsInitThread.join();
 	#else
@@ -411,17 +478,6 @@ void SpringApp::LoadFonts()
 
 }
 
-// initialize basic systems for command line help / output
-static void ConsolePrintInitialize(const std::string& configSource, bool safemode)
-{
-	spring_clock::PushTickRate(false);
-	spring_time::setstarttime(spring_time::gettime(true));
-	LOG_DISABLE();
-	FileSystemInitializer::PreInitializeConfigHandler(configSource, safemode);
-	FileSystemInitializer::InitializeLogOutput();
-	LOG_ENABLE();
-}
-
 
 /**
  * @return whether commandline parsing was successful
@@ -430,6 +486,9 @@ static void ConsolePrintInitialize(const std::string& configSource, bool safemod
  */
 void SpringApp::ParseCmdLine(int argc, char* argv[])
 {
+	if (argc >= 2)
+		inputFile = argv[1];
+
 #ifndef WIN32
 	if (!FLAGS_nocolor && (getenv("SPRING_NOCOLOR") == NULL)) {
 		// don't colorize, if our output is piped to a diff tool or file
@@ -466,17 +525,15 @@ void SpringApp::ParseCmdLine(int argc, char* argv[])
 		DefType::OutputTagMap();
 		exit(EXIT_SUCCESS);
 	}
-	if (FLAGS_list_ceg_classes) {
-		const int res = CCustomExplosionGenerator::OutputProjectileClassInfo() ? EXIT_SUCCESS : EXIT_FAILURE;
-		exit(res);
-	}
+	if (FLAGS_list_ceg_classes)
+		exit(CCustomExplosionGenerator::OutputProjectileClassInfo() ? EXIT_SUCCESS : EXIT_FAILURE);
 
 	// Runtime Tests
 	if (FLAGS_test_creg) {
 #ifdef USING_CREG
 		exit(creg::RuntimeTest() ? EXIT_SUCCESS : EXIT_FAILURE);
 #else
-		LOG_L(L_ERROR, "Creg is not enabled!\n");
+		LOG_L(L_ERROR, "[SpringApp::%s] CREG is not enabled!\n", __func__);
 		exit(EXIT_FAILURE); //Do not fail tests
 #endif
 	}
@@ -493,7 +550,7 @@ void SpringApp::ParseCmdLine(int argc, char* argv[])
 		exit(EXIT_SUCCESS);
 	}
 
-	//LOG("[%s] command-line args: \"%s\"", __func__, cmdline->GetCmdLine().c_str());
+	// if this fails, configHandler remains null
 	FileSystemInitializer::PreInitializeConfigHandler(FLAGS_config, FLAGS_safemode);
 
 	if (FLAGS_textureatlas)
@@ -509,10 +566,6 @@ void SpringApp::ParseCmdLine(int argc, char* argv[])
 			CBenchmark::startFrame = FLAGS_benchmarkstart * 60 * GAME_SPEED;
 
 		CBenchmark::endFrame = CBenchmark::startFrame + FLAGS_benchmark * 60 * GAME_SPEED;
-	}
-
-	if (argc >= 2) {
-		inputFile = argv[1];
 	}
 }
 
@@ -712,14 +765,22 @@ void SpringApp::Reload(const std::string script)
 
 	LOG("[SpringApp::%s][5]", __func__);
 
-	LuaVFSDownload::Free();
+	// do not stop running downloads when reloading
+	LuaVFSDownload::Free(false);
 	spring::SafeDelete(battery);
 
 	LOG("[SpringApp::%s][6]", __func__);
 
+	#if 0
 	// note: technically we only need to use RemoveArchive
 	FileSystemInitializer::Cleanup(false);
 	FileSystemInitializer::Initialize();
+	#else
+	// do not cleanup+reinit; LuaVFS thread might see NULL while scanner is temporarily gone
+	// handling that in ScanAllDirs would leave the archive-cache incomplete, which also has
+	// implications for sync
+	FileSystemInitializer::Reload();
+	#endif
 
 	LOG("[SpringApp::%s][7]", __func__);
 
@@ -848,6 +909,20 @@ int SpringApp::Run()
 
 
 
+int SpringApp::PostKill(const Threading::Error& e)
+{
+	if (Threading::IsMainThread())
+		return -1;
+
+	// checked by Run() after Init()
+	Threading::SetThreadError(e);
+
+	if (gu == nullptr)
+		return 0;
+
+	return (gu->globalQuit = true);
+}
+
 /**
  * Deallocates and shuts down engine
  */
@@ -855,12 +930,14 @@ void SpringApp::Kill(bool fromRun)
 {
 	assert(Threading::IsMainThread());
 
-	if (numShutDowns > 0) {
+	if (numKilleds > 0) {
 		assert(!fromRun);
 		return;
 	}
+	if (!fromRun)
+		Watchdog::ClearTimer();
 
-	numShutDowns += 1;
+	numKilleds += 1;
 
 	LOG("[SpringApp::%s][1] fromRun=%d", __func__, fromRun);
 	ThreadPool::SetThreadCount(0);
@@ -889,7 +966,7 @@ void SpringApp::Kill(bool fromRun)
 	spring::SafeDelete(gameServer);
 	spring::SafeDelete(gameSetup);
 
-	LOG("[SpringApp::%s][4]", __func__);
+	LOG("[SpringApp::%s][4] font=%p", __func__, font);
 	spring::SafeDelete(keyCodes);
 	agui::FreeGui();
 	spring::SafeDelete(font);
@@ -913,13 +990,14 @@ void SpringApp::Kill(bool fromRun)
 	// also gets rid of configHandler
 	FileSystemInitializer::Cleanup();
 	DataDirLocater::FreeInstance();
+	ThreadPool::ClearExtJobs();
 
 	LOG("[SpringApp::%s][8]", __func__);
 	Watchdog::DeregisterThread(WDT_MAIN);
 	Watchdog::Uninstall();
 	LOG("[SpringApp::%s][9]", __func__);
 
-	numShutDowns -= 1;
+	numKilleds -= 1;
 }
 
 

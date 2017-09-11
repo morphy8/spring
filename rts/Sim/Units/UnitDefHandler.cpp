@@ -184,19 +184,23 @@ void CUnitDefHandler::LoadSounds(const LuaTable& soundsTable, GuiSoundSet& gsoun
 	LuaTable sndTable = soundsTable.SubTable(soundName);
 	for (int i = 1; true; i++) {
 		LuaTable sndFileTable = sndTable.SubTable(i);
+
 		if (sndFileTable.IsValid()) {
 			fileName = sndFileTable.GetString("file", "");
+
 			if (!fileName.empty()) {
 				const float volume = sndFileTable.GetFloat("volume", 1.0f);
-				if (volume > 0.0f) {
+
+				if (volume > 0.0f)
 					LoadSound(gsound, fileName, volume);
-				}
+
 			}
 		} else {
 			fileName = sndTable.GetString(i, "");
-			if (fileName.empty()) {
+
+			if (fileName.empty())
 				break;
-			}
+
 			LoadSound(gsound, fileName, 1.0f);
 		}
 	}
@@ -205,12 +209,7 @@ void CUnitDefHandler::LoadSounds(const LuaTable& soundsTable, GuiSoundSet& gsoun
 
 void CUnitDefHandler::LoadSound(GuiSoundSet& gsound, const string& fileName, const float volume)
 {
-	const int id = LoadSoundFile(fileName);
-	if (id > 0)
-	{
-		GuiSoundSet::Data soundData(fileName, id, volume);
-		gsound.sounds.push_back(soundData);
-	}
+	gsound.sounds.emplace_back(fileName, -1, volume);
 }
 
 

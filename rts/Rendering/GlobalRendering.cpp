@@ -313,7 +313,7 @@ bool CGlobalRendering::CreateGLContext(const int2& minCtx)
 {
 	assert(glContext == nullptr);
 
-	constexpr int2 glCtxs[] = {{2, 0}, {2, 1},  {3, 0}, {3, 1}, {3, 2}, {3, 3},  {4, 0}, {4, 1}, {4, 2}, {4, 3}, {4, 4}, {4, 5}};
+	constexpr int2 glCtxs[] = {{2, 0}, {2, 1},  {3, 0}, {3, 1}, {3, 2}, {3, 3},  {4, 0}, {4, 1}, {4, 2}, {4, 3}, {4, 4}, {4, 5}, {4, 6}};
 	          int2 cmpCtx;
 
 	if (std::find(&glCtxs[0], &glCtxs[0] + (sizeof(glCtxs) / sizeof(int2)), minCtx) == (&glCtxs[0] + (sizeof(glCtxs) / sizeof(int2)))) {
@@ -718,11 +718,13 @@ void CGlobalRendering::LogVersionInfo(const char* sdlVersionStr, const char* glV
 	LOG("\tGLSL version: %s", globalRenderingInfo.glslVersion);
 	LOG("\tGLEW version: %s", globalRenderingInfo.glewVersion);
 	LOG("\tGPU memory  : %s", glVidMemStr);
-	LOG("\tSwapInterval: %d", SDL_GL_GetSwapInterval());
+	LOG("\tSDL swap-int: %d", SDL_GL_GetSwapInterval());
 	LOG("\t");
 	LOG("\tARB shader support        : %i", haveARB);
 	LOG("\tGLSL shader support       : %i", haveGLSL);
 	LOG("\tFBO extension support     : %i", FBO::IsSupported());
+	LOG("\tNVX GPU mem-info support  : %i", glewIsExtensionSupported("GL_NVX_gpu_memory_info"));
+	LOG("\tATI GPU mem-info support  : %i", glewIsExtensionSupported("GL_ATI_meminfo"));
 	LOG("\tNPOT-texture support      : %i (%i)", supportNonPowerOfTwoTex, glewIsExtensionSupported("GL_ARB_texture_non_power_of_two"));
 	LOG("\ttexture query-LOD support : %i (%i)", supportTextureQueryLOD, glewIsExtensionSupported("GL_ARB_texture_query_lod"));
 	LOG("\t24-bit Z-buffer support   : %i (-)", support24bitDepthBuffer);
@@ -741,7 +743,6 @@ void CGlobalRendering::LogVersionInfo(const char* sdlVersionStr, const char* glV
 	LOG("\t");
 	LOG("\tenable ATI-hacks : %i", atiHacks);
 	LOG("\tcompress MIP-maps: %i", compressTextures);
-
 }
 
 void CGlobalRendering::LogDisplayMode() const
@@ -1114,6 +1115,7 @@ static void _GL_APIENTRY glDebugMessageCallbackFunc(
 	const GLvoid* userParam
 ) {
 	switch (msgID) {
+		case 131169: { return; } break; // "Framebuffer detailed info: The driver allocated storage for renderbuffer N."
 		case 131185: { return; } break; // "Buffer detailed info: Buffer object 260 (bound to GL_PIXEL_UNPACK_BUFFER_ARB, usage hint is GL_STREAM_DRAW) has been mapped in DMA CACHED memory."
 		default: {} break;
 	}
@@ -1127,7 +1129,9 @@ static void _GL_APIENTRY glDebugMessageCallbackFunc(
 	if ((userParam == nullptr) || !(*reinterpret_cast<const bool*>(userParam)))
 		return;
 
+	CrashHandler::PrepareStacktrace();
 	CrashHandler::Stacktrace(Threading::GetCurrentThread(), "rendering", LOG_LEVEL_WARNING);
+	CrashHandler::CleanupStacktrace();
 }
 #endif
 

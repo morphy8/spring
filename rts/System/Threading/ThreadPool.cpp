@@ -56,6 +56,10 @@ struct ThreadStats {
 
 
 
+// external background threads which are only joined on exit
+static std::vector< spring::thread > extThreads;
+static std::vector< std::future<void> > extFutures;
+
 // global [idx = 0] and smaller per-thread [idx > 0] queues; the latter are
 // for tasks that want to execute on specific threads, e.g. parallel_reduce
 // note: std::shared_ptr<T> can not be made atomic, queues must store T*'s
@@ -460,10 +464,10 @@ void SetThreadCount(int wantedNumThreads)
 	const int wtdNumThreads = Clamp(wantedNumThreads, 1, GetMaxThreads());
 
 	const char* fmts[4] = {
-		"[ThreadPool::%s][1] wanted=%d current=%d maximum=%d",
+		"[ThreadPool::%s][1] wanted=%d current=%d maximum=%d (init=%d)",
 		"[ThreadPool::%s][2] workers=%lu",
 		"\t[async=%d] threads=%d tasks=%lu {sum,avg}{exec,wait}time={{%.3f, %.3f}, {%.3f, %.3f}}ms",
-		"\t\tthread=%d tasks=%lu (%3.3f%%) {sum,min,max,avg}{exec,wait}time={{%.3f, %.3f, %.3f, %.3f}, {%.3f, %.3f, %.3f, %.3f}}ms",
+		"\t\tthread=%d tasks=%lu {sum,min,max,avg}{exec,wait}time={{%.3f, %.3f, %.3f, %.3f}, {%.3f, %.3f, %.3f, %.3f}}ms",
 	};
 
 	// total number of tasks executed by pool; total time spent in DoTask
@@ -471,7 +475,7 @@ void SetThreadCount(int wantedNumThreads)
 	uint64_t pSumExecTimes[2] = {0lu, 0lu};
 	uint64_t pSumWaitTimes[2] = {0lu, 0lu};
 
-	LOG(fmts[0], __func__, wantedNumThreads, curNumThreads, GetMaxThreads());
+	LOG(fmts[0], __func__, wantedNumThreads, curNumThreads, GetMaxThreads(), workerThreads[false].empty());
 
 	if (workerThreads[false].empty()) {
 		assert(workerThreads[true].empty());
@@ -484,13 +488,13 @@ void SetThreadCount(int wantedNumThreads)
 		#ifdef USE_TASK_STATS_TRACKING
 		for (bool async: {false, true}) {
 			for (int i = 0; i < MAX_THREADS; i++) {
-				threadStats[async][i].numTasksRun =  0lu;
-				threadStats[async][i].sumExecTime =  0lu;
-				threadStats[async][i].minExecTime = -1lu;
-				threadStats[async][i].maxExecTime =  0lu;
-				threadStats[async][i].sumWaitTime =  0lu;
-				threadStats[async][i].minWaitTime = -1lu;
-				threadStats[async][i].maxWaitTime =  0lu;
+				threadStats[async][i].numTasksRun = std::numeric_limits<uint64_t>::min();
+				threadStats[async][i].sumExecTime = std::numeric_limits<uint64_t>::min();
+				threadStats[async][i].minExecTime = std::numeric_limits<uint64_t>::max();
+				threadStats[async][i].maxExecTime = std::numeric_limits<uint64_t>::min();
+				threadStats[async][i].sumWaitTime = std::numeric_limits<uint64_t>::min();
+				threadStats[async][i].minWaitTime = std::numeric_limits<uint64_t>::max();
+				threadStats[async][i].maxWaitTime = std::numeric_limits<uint64_t>::min();
 			}
 		}
 		#endif
@@ -536,9 +540,8 @@ void SetThreadCount(int wantedNumThreads)
 				const float tMaxWaitTime = ts.maxWaitTime * 1e-6f; // ms
 				const float tAvgExecTime = tSumExecTime / std::max(ts.numTasksRun, uint64_t(1));
 				const float tAvgWaitTime = tSumWaitTime / std::max(ts.numTasksRun, uint64_t(1));
-				const float tRelExecFrac = (ts.numTasksRun * 1e2f) / std::max(pNumTasksRun[async], uint64_t(1));
 
-				LOG(fmts[3], i, ts.numTasksRun, tRelExecFrac,  tSumExecTime, tMinExecTime, tMaxExecTime, tAvgExecTime,  tSumWaitTime, tMinWaitTime, tMaxWaitTime, tAvgWaitTime);
+				LOG(fmts[3], i, ts.numTasksRun,  tSumExecTime, tMinExecTime, tMaxExecTime, tAvgExecTime,  tSumWaitTime, tMinWaitTime, tMaxWaitTime, tAvgWaitTime);
 			}
 		}
 	}
@@ -607,6 +610,57 @@ void SetDefaultThreadCount()
 
 		Threading::SetAffinityHelper("Main", mainAffinity & mainCoreAffinity);
 	}
+}
+
+
+
+void AddExtJob(spring::thread&& t) {
+	for (auto& et: extThreads) {
+		if (et.joinable())
+			continue;
+
+		et = std::move(t);
+		return;
+	}
+
+	extThreads.emplace_back(std::move(t));
+}
+
+void AddExtJob(std::future<void>&& f) {
+	#ifndef WIN32
+	for (auto& ef: extFutures) {
+		// find a future whose (void) result is already available, without blocking
+		// FIXME: does not currently (august 2017) compile on Windows mingw buildbots
+		if (ef.wait_until(std::chrono::system_clock::now() + std::chrono::seconds(0)) != std::future_status::ready)
+			continue;
+
+		ef = std::move(f);
+		return;
+	}
+	#endif
+
+	extFutures.emplace_back(std::move(f));
+}
+
+static void JoinExtThreads() {
+	for (auto& t: extThreads) {
+		t.join();
+	}
+
+	extThreads.clear();
+}
+
+static void GetExtFutures() {
+	for (auto& f: extFutures) {
+		f.get();
+	}
+
+	extFutures.clear();
+}
+
+void ClearExtJobs() {
+	JoinExtThreads();
+	GetExtFutures();
 }
 
 }

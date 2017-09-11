@@ -77,9 +77,6 @@ static const void BindOpaqueTexAtlas(const CS3OTextureHandler::S3OTexMat*) {
 }
 static const void BindOpaqueTexDummy(const CS3OTextureHandler::S3OTexMat*) {}
 
-static const void BindShadowTexDummy(const CS3OTextureHandler::S3OTexMat*) {}
-static const void KillShadowTexDummy(const CS3OTextureHandler::S3OTexMat*) {}
-
 static const void BindShadowTex(const CS3OTextureHandler::S3OTexMat* textureMat) {
 	glActiveTexture(GL_TEXTURE0);
 	glEnable(GL_TEXTURE_2D);
@@ -383,8 +380,6 @@ void CUnitDrawer::Update()
 
 void CUnitDrawer::Draw(bool drawReflection, bool drawRefraction)
 {
-	SCOPED_GMARKER("CUnitDrawer::Draw");
-
 	sky->SetupFog();
 
 	assert((CCamera::GetActiveCamera())->GetCamType() != CCamera::CAMTYPE_SHADOW);
@@ -533,6 +528,7 @@ bool CUnitDrawer::CanDrawOpaqueUnit(
 		return false;
 	if (unit->IsInVoid())
 		return false;
+	// unit will be drawn as icon instead
 	if (unit->isIcon)
 		return false;
 
@@ -593,7 +589,7 @@ void CUnitDrawer::DrawOpaqueUnitsShadow(int modelType) {
 		const int textureType = unitBinPair.first;
 
 		// only need to bind the atlas once for 3DO's, but KISS
-		assert((modelType == MODELTYPE_3DO) == (textureType == -1));
+		assert((modelType != MODELTYPE_3DO) || (textureType == 0));
 		shadowTexBindFuncs[modelType](texturehandlerS3O->GetTexture(textureType));
 
 		for (const auto& unitSetP: unitSet) {
@@ -653,9 +649,8 @@ void CUnitDrawer::DrawShadowPass()
 
 void CUnitDrawer::DrawIcon(CUnit* unit, bool useDefaultIcon)
 {
-	// for radar icons; normal void-units are already filtered
-	if (unit->IsInVoid())
-		return;
+	// iconUnits should not never contain void-space units, see UpdateUnitIconState
+	assert(!unit->IsInVoid());
 
 	// If the icon is to be drawn as a radar blip, we want to get the default icon.
 	const icon::CIconData* iconData = nullptr;
@@ -746,8 +741,6 @@ void CUnitDrawer::ResetAlphaDrawing(bool deferredPass)
 
 void CUnitDrawer::DrawAlphaPass()
 {
-	SCOPED_GMARKER("CUnitDrawer::DrawAlphaPass");
-
 	{
 		SetupAlphaDrawing(false);
 
@@ -1477,6 +1470,9 @@ inline void CUnitDrawer::UpdateUnitIconState(CUnit* unit) {
 	if (unit->noDraw)
 		return;
 	if (unit->IsInVoid())
+		return;
+	// drawing icons is cheap but not free, avoid a perf-hit when many are offscreen
+	if (!camera->InView(unit->drawMidPos, unit->GetDrawRadius()))
 		return;
 
 	iconUnits.push_back(unit);

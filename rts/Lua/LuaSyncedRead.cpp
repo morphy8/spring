@@ -23,6 +23,7 @@
 #include "Map/MapDamage.h"
 #include "Map/MapInfo.h"
 #include "Map/ReadMap.h"
+#include "Rendering/Env/GrassDrawer.h"
 #include "Rendering/Models/IModelParser.h"
 #include "Sim/Misc/DamageArrayHandler.h"
 #include "Sim/Misc/SideParser.h"
@@ -98,11 +99,6 @@ bool LuaSyncedRead::PushEntries(lua_State* L)
 	LuaPushNamedNumber(L, "MY_UNITS",    MyUnits);
 	LuaPushNamedNumber(L, "ALLY_UNITS",  AllyUnits);
 	LuaPushNamedNumber(L, "ENEMY_UNITS", EnemyUnits);
-
-#define REGISTER_LUA_CFUNC(x) \
-	lua_pushstring(L, #x);      \
-	lua_pushcfunction(L, x);    \
-	lua_rawset(L, -3)
 
 	// READ routines, sync safe
 	REGISTER_LUA_CFUNC(IsCheatingEnabled);
@@ -310,6 +306,7 @@ bool LuaSyncedRead::PushEntries(lua_State* L)
 	REGISTER_LUA_CFUNC(GetGroundBlocked);
 	REGISTER_LUA_CFUNC(GetGroundExtremes);
 	REGISTER_LUA_CFUNC(GetTerrainTypeData);
+	REGISTER_LUA_CFUNC(GetGrass);
 
 	REGISTER_LUA_CFUNC(GetSmoothMeshHeight);
 
@@ -3969,14 +3966,14 @@ static void PackCommand(lua_State* L, const Command& cmd)
 
 static void PackCommandQueue(lua_State* L, const CCommandQueue& commands, size_t count)
 {
-	lua_createtable(L, commands.size(), 0);
-
 	size_t c = 0;
 
 	// get the desired number of commands to return
-	if (count == -1u) {
+	if (count == -1u)
 		count = commands.size();
-	}
+
+	// count can exceed the queue size, clamp
+	lua_createtable(L, std::min(count, commands.size()), 0);
 
 	// {[1] = cq[0], [2] = cq[1], ...}
 	for (auto ci = commands.begin(); ci != commands.end(); ++ci) {
@@ -5058,6 +5055,13 @@ int LuaSyncedRead::GetTerrainTypeData(lua_State* L)
 		return 0;
 
 	return (PushTerrainTypeData(L, &mapInfo->terrainTypes[tti], false));
+}
+
+int LuaSyncedRead::GetGrass(lua_State* L)
+{
+	const float3 pos(luaL_checkfloat(L, 1), 0.0f, luaL_checkfloat(L, 2));
+	lua_pushnumber(L, grassDrawer->GetGrass(pos.cClampInBounds()));
+	return 1;
 }
 
 /******************************************************************************/

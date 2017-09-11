@@ -138,11 +138,6 @@ bool LuaSyncedCtrl::PushEntries(lua_State* L)
 	}
 
 
-#define REGISTER_LUA_CFUNC(x) \
-	lua_pushstring(L, #x);      \
-	lua_pushcfunction(L, x);    \
-	lua_rawset(L, -3)
-
 	REGISTER_LUA_CFUNC(SetAlly);
 	REGISTER_LUA_CFUNC(KillTeam);
 	REGISTER_LUA_CFUNC(AssignPlayerToTeam);
@@ -1265,7 +1260,7 @@ int LuaSyncedCtrl::CreateUnit(lua_State* L)
 	if (unit == nullptr)
 		return 0;
 
-	unit->SetSoloBuilder(builder);
+	unit->SetSoloBuilder(builder, unitDef);
 
 	lua_pushnumber(L, unit->id);
 	return 1;
@@ -1712,8 +1707,7 @@ int LuaSyncedCtrl::SetUnitMaxRange(lua_State* L)
 	if (unit == nullptr)
 		return 0;
 
-	const float maxRange = max(0.0f, luaL_checkfloat(L, 2));
-	unit->maxRange = maxRange;
+	unit->maxRange = std::max(0.0f, luaL_checkfloat(L, 2));
 	return 0;
 }
 
@@ -1725,8 +1719,7 @@ int LuaSyncedCtrl::SetUnitExperience(lua_State* L)
 	if (unit == nullptr)
 		return 0;
 
-	const float experience = max(0.0f, luaL_checkfloat(L, 2));
-	unit->AddExperience(experience - unit->experience);
+	unit->AddExperience(std::max(0.0f, luaL_checkfloat(L, 2)) - unit->experience);
 	return 0;
 }
 
@@ -2676,20 +2669,17 @@ int LuaSyncedCtrl::RemoveBuildingDecal(lua_State* L)
 
 int LuaSyncedCtrl::AddGrass(lua_State* L)
 {
-	float3 pos(luaL_checkfloat(L, 1), 0.0f, luaL_checkfloat(L, 2));
-	pos.ClampInBounds();
+	const float3 pos(luaL_checkfloat(L, 1), 0.0f, luaL_checkfloat(L, 2));
 
-	grassDrawer->AddGrass(pos);
+	grassDrawer->AddGrass(pos.cClampInBounds());
 	return 0;
 }
 
-
 int LuaSyncedCtrl::RemoveGrass(lua_State* L)
 {
-	float3 pos(luaL_checkfloat(L, 1), 0.0f, luaL_checkfloat(L, 2));
-	pos.ClampInBounds();
+	const float3 pos(luaL_checkfloat(L, 1), 0.0f, luaL_checkfloat(L, 2));
 
-	grassDrawer->RemoveGrass(pos);
+	grassDrawer->RemoveGrass(pos.cClampInBounds());
 	return 0;
 }
 

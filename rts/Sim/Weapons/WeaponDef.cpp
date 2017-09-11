@@ -5,7 +5,6 @@
 #include "Game/TraceRay.h"
 #include "Rendering/Models/IModelParser.h"
 #include "Rendering/Textures/ColorMap.h"
-#include "Sim/Misc/CommonDefHandler.h"
 #include "Sim/Misc/DamageArrayHandler.h"
 #include "Sim/Misc/DefinitionTag.h"
 #include "Sim/Misc/GlobalConstants.h"
@@ -103,7 +102,7 @@ WEAPONDUMMYTAG(float, flighttime).defaultValue(0).scaleValue(GAME_SPEED).descrip
 WEAPONTAG(float, turnrate).defaultValue(0.0f).scaleValue(float(TAANG2RAD) / GAME_SPEED);
 WEAPONTAG(float, heightBoostFactor).defaultValue(-1.0f);
 WEAPONTAG(float, proximityPriority).defaultValue(1.0f);
-WEAPONTAG(bool, allowNonBlockingAim).defaultValue(false).description("When false, the weapon is blocked from fireing till AimWeapon() returns.");
+WEAPONTAG(bool, allowNonBlockingAim).defaultValue(false).description("When false, the weapon is blocked from firing until AimWeapon() returns.");
 
 // Target Error
 TAGFUNCTION(AccuracyToSin, float, math::sin(x * math::PI / 0xafff)) // should really be tan but TA seem to cap it somehow, should also be 7fff or ffff theoretically but neither seems good
@@ -557,36 +556,30 @@ void WeaponDef::LoadSound(
 	const LuaTable& wdTable,
 	const std::string& soundKey,
 	const unsigned int soundIdx,
-	std::vector<GuiSoundSet::Data>& soundData)
-{
-	string name = "";
-	int id = -1;
-	float volume = -1.0f;
+	std::vector<GuiSoundSet::Data>& soundData
+) {
+	soundData.emplace_back("", -1, -1.0f);
+	GuiSoundSet::Data& data = soundData.back();
 
-	soundData.push_back(GuiSoundSet::Data(name, id, volume));
 	assert(soundIdx < soundData.size());
 	assert(soundData[soundIdx].id == -1);
 
 	if (soundKey == "soundStart") {
-		name   = wdTable.GetString(soundKey, "");
-		volume = wdTable.GetFloat(soundKey + "Volume", -1.0f);
-	}
-	else if (soundKey == "soundHitDry") {
-		name   = wdTable.GetString(soundKey, wdTable.GetString("soundHit", ""));
-		volume = wdTable.GetFloat(soundKey + "Volume", wdTable.GetFloat("soundHitVolume", -1.0f));
-	}
-	else if (soundKey == "soundHitWet") {
-		name   = wdTable.GetString(soundKey, wdTable.GetString("soundHit", ""));
-		volume = wdTable.GetFloat(soundKey + "Volume", wdTable.GetFloat("soundHitVolume", -1.0f));
-	}
-
-	if (name.empty())
+		data.name   = wdTable.GetString(soundKey, "");
+		data.volume = wdTable.GetFloat(soundKey + "Volume", -1.0f);
 		return;
+	}
 
-	if ((id = CommonDefHandler::LoadSoundFile(name)) <= 0)
+	if (soundKey == "soundHitDry") {
+		data.name   = wdTable.GetString(soundKey, wdTable.GetString("soundHit", ""));
+		data.volume = wdTable.GetFloat(soundKey + "Volume", wdTable.GetFloat("soundHitVolume", -1.0f));
 		return;
-
-	soundData[soundIdx] = GuiSoundSet::Data(name, id, volume);
+	}
+	if (soundKey == "soundHitWet") {
+		data.name   = wdTable.GetString(soundKey, wdTable.GetString("soundHit", ""));
+		data.volume = wdTable.GetFloat(soundKey + "Volume", wdTable.GetFloat("soundHitVolume", -1.0f));
+		return;
+	}
 }
 
 

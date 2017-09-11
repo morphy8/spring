@@ -1770,15 +1770,15 @@ void CUnit::DropCurrentAttackTarget()
 }
 
 
-void CUnit::SetSoloBuilder(CUnit* builder)
+bool CUnit::SetSoloBuilder(CUnit* builder, const UnitDef* buildeeDef)
 {
 	if (builder == nullptr)
-		return;
-	if (unitDef->canBeAssisted)
-		return;
+		return false;
+	if (buildeeDef->canBeAssisted)
+		return false;
 
-	soloBuilder = builder;
-	AddDeathDependence(builder, DEPENDENCE_BUILDER);
+	AddDeathDependence(soloBuilder = builder, DEPENDENCE_BUILDER);
+	return true;
 }
 
 void CUnit::SetLastAttacker(CUnit* attacker)
@@ -1919,6 +1919,9 @@ bool CUnit::SetGroup(CGroup* newGroup, bool fromFactory, bool autoSelect)
 
 bool CUnit::AddBuildPower(CUnit* builder, float amount)
 {
+	if (isDead || IsCrashing())
+		return false;
+
 	// stop decaying on building AND reclaim
 	lastNanoAdd = gs->frameNum;
 
@@ -1991,9 +1994,6 @@ bool CUnit::AddBuildPower(CUnit* builder, float amount)
 		}
 	} else {
 		// reclaim
-		if (isDead || IsCrashing())
-			return false;
-
 		if (!AllowedReclaim(builder)) {
 			builder->DependentDied(this);
 			return false;
@@ -2664,9 +2664,8 @@ bool CUnit::DetachUnit(CUnit* unit)
 		// erase command queue unless it's a wait command
 		const CCommandQueue& queue = unit->commandAI->commandQue;
 
-		if (unitDef->IsTransportUnit() && (queue.empty() || (queue.front().GetID() != CMD_WAIT))) {
+		if (unitDef->IsTransportUnit() && (queue.empty() || (queue.front().GetID() != CMD_WAIT)))
 			unit->commandAI->GiveCommand(Command(CMD_STOP));
-		}
 
 		return true;
 	}
@@ -2681,9 +2680,8 @@ bool CUnit::DetachUnitFromAir(CUnit* unit, const float3& pos)
 		unit->Drop(this->pos, this->frontdir, this);
 
 		// add an additional move command for after we land
-		if (unitDef->IsTransportUnit() && unit->unitDef->canmove) {
+		if (unitDef->IsTransportUnit() && unit->unitDef->canmove)
 			unit->commandAI->GiveCommand(Command(CMD_MOVE, pos));
-		}
 
 		return true;
 	}
@@ -2702,9 +2700,10 @@ bool CUnit::CanLoadUnloadAtPos(const float3& wantedPos, const CUnit* unit, float
 }
 
 float CUnit::GetTransporteeWantedHeight(const float3& wantedPos, const CUnit* unit, bool* allowedPos) const {
-	bool isAllowedHeight = true;
+	bool isAllowedTerrain = true;
 
 	float wantedHeight = unit->pos.y;
+	float wantedSlope = 90.0f;
 	float clampedHeight = wantedHeight;
 
 	const UnitDef* transporteeUnitDef = unit->unitDef;
@@ -2714,8 +2713,9 @@ float CUnit::GetTransporteeWantedHeight(const float3& wantedPos, const CUnit* un
 		// if unit is being transported, set <clampedHeight>
 		// to the altitude at which to UNload the transportee
 		wantedHeight = CGround::GetHeightReal(wantedPos.x, wantedPos.z);
+		wantedSlope = CGround::GetSlope(wantedPos.x, wantedPos.z);
 
-		if ((isAllowedHeight = transporteeUnitDef->CheckTerrainConstraints(transporteeMoveDef, wantedHeight, &clampedHeight))) {
+		if ((isAllowedTerrain = CGameHelper::CheckTerrainConstraints(transporteeUnitDef, transporteeMoveDef, wantedHeight, wantedHeight, wantedSlope, &clampedHeight))) {
 			if (transporteeMoveDef != nullptr) {
 				// transportee is a mobile ground unit
 				switch (transporteeMoveDef->speedModClass) {
@@ -2744,8 +2744,8 @@ float CUnit::GetTransporteeWantedHeight(const float3& wantedPos, const CUnit* un
 			bi.pos = CGameHelper::Pos2BuildPos(bi, true);
 			CFeature* f = nullptr;
 
-			if (isAllowedHeight && (!CGameHelper::TestUnitBuildSquare(bi, f, -1, true) || f != nullptr))
-				isAllowedHeight = false;
+			if (isAllowedTerrain && (!CGameHelper::TestUnitBuildSquare(bi, f, -1, true) || f != nullptr))
+				isAllowedTerrain = false;
 		}
 	}
 
@@ -2758,10 +2758,10 @@ float CUnit::GetTransporteeWantedHeight(const float3& wantedPos, const CUnit* un
 	// land units on shore --> would require too many special cases
 	// therefore restrict its use to transport aircraft
 	if (this->moveDef == nullptr)
-		isAllowedHeight &= unitDef->CheckTerrainConstraints(nullptr, rawContactHeight, &modContactHeight);
+		isAllowedTerrain &= CGameHelper::CheckTerrainConstraints(unitDef, nullptr, rawContactHeight, rawContactHeight, 90.0f, &modContactHeight);
 
 	if (allowedPos != nullptr)
-		*allowedPos = isAllowedHeight;
+		*allowedPos = isAllowedTerrain;
 
 	return modContactHeight;
 }

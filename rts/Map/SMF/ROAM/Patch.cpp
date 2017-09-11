@@ -117,7 +117,6 @@ bool CTriNodePool::Allocate(TriTreeNode*& left, TriTreeNode*& right)
 Patch::Patch()
 	: smfGroundDrawer(nullptr)
 	, currentVariance(nullptr)
-	, currentPool(nullptr)
 	, isDirty(true)
 	, vboVerticesUploaded(false)
 	, varianceMaxLimit(std::numeric_limits<float>::max())
@@ -238,12 +237,12 @@ bool Patch::Split(TriTreeNode* tri)
 	if (!tri->IsLeaf())
 		return true;
 
-	// if this triangle is not in a proper diamond, force split our base neighbor
+	// if this triangle is not in a proper diamond, force split our base-neighbor
 	if (tri->BaseNeighbor != nullptr && (tri->BaseNeighbor->BaseNeighbor != tri))
 		Split(tri->BaseNeighbor);
 
 	// create children and link into mesh, or make this triangle a leaf
-	if (!currentPool->Allocate(tri->LeftChild, tri->RightChild))
+	if (!curTriPool->Allocate(tri->LeftChild, tri->RightChild))
 		return false;
 
 	assert(tri->IsBranch());
@@ -488,21 +487,25 @@ bool Patch::Tessellate(const float3& camPos, int viewRadius, bool shadowPass)
 	midPos.z = (coors.y + PATCH_SIZE / 2) * SQUARE_SIZE;
 	midPos.y = (readMap->GetCurrMinHeight() + readMap->GetCurrMaxHeight()) * 0.5f;
 
-	currentPool = CTriNodePool::GetPool(shadowPass);
+	// Tessellate is called from multiple threads during both passes
+	// caller ensures that two patches that are neighbors or share a
+	// neighbor are never touched concurrently (crucial for ::Split)
+	curTriPool = CTriNodePool::GetPool(shadowPass);
 
+	// MAGIC NUMBER 1: scale factor to reduce LOD with camera distance
 	camDistLODFactor  = midPos.distance(camPos);
-	camDistLODFactor *= (300.0f / viewRadius); // MAGIC NUMBER 1: increase the dividend to reduce LOD in camera distance
+	camDistLODFactor *= (300.0f / viewRadius);
 	camDistLODFactor  = std::max(1.0f, camDistLODFactor);
 	camDistLODFactor  = 1.0f / camDistLODFactor;
 
 	// MAGIC NUMBER 2:
-	//   variances are clamped by it, so it regulates how strong areas are tessellated.
-	//   Note, the maximum tessellation is untouched by it. Instead it reduces the maximum
-	//   LOD in distance, while the param above defines the overall FallOff rate.
+	//   regulates how deeply areas are tessellated by clamping variances to it
+	//   (the maximum tessellation is still untouched, this reduces the maximum
+	//   far-distance LOD while the param above defines an overall falloff-rate)
 	varianceMaxLimit = viewRadius * 0.35f;
 
 	{
-		// Split each of the base triangles
+		// split each of the base triangles
 		currentVariance = &varianceLeft[0];
 
 		const int2 left = {coors.x,              coors.y + PATCH_SIZE};
@@ -521,7 +524,7 @@ bool Patch::Tessellate(const float3& camPos, int viewRadius, bool shadowPass)
 		RecursTessellate(&baseRight, left, rght, apex, 1);
 	}
 
-	return (!currentPool->OutOfNodes());
+	return (!curTriPool->OutOfNodes());
 }
 
 

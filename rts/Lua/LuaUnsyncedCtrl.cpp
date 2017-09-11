@@ -114,11 +114,6 @@ const int CMD_INDEX_OFFSET = 1; // starting index for command descriptions
 
 bool LuaUnsyncedCtrl::PushEntries(lua_State* L)
 {
-#define REGISTER_LUA_CFUNC(x) \
-	lua_pushstring(L, #x);      \
-	lua_pushcfunction(L, x);    \
-	lua_rawset(L, -3)
-
 	REGISTER_LUA_CFUNC(Echo);
 	REGISTER_LUA_CFUNC(Log);
 
@@ -3198,7 +3193,7 @@ int LuaUnsyncedCtrl::SetDecalAlpha(lua_State* L)
 		return 0;
 
 	auto decal = decalsGl4->GetDecalByIdx(luaL_checkint(L, 1));
-	decal.rot = luaL_checkfloat(L, 2);
+	decal.alpha = luaL_checkfloat(L, 2);
 	decal.Invalidate();
 	return 0;
 }

@@ -15,6 +15,15 @@
 #include "System/FileSystem/FileQueryFlags.h"
 #include "System/FileSystem/FileHandler.h"
 #include "System/Log/ILog.h"
+#include "System/Threading/ThreadPool.h"
+
+#ifdef CreateDirectory
+#undef CreateDirectory
+#endif
+
+#ifdef GetCurrentTime
+#undef GetCurrentTime
+#endif
 
 // server and client memory-streams
 static std::unique_ptr<std::stringstream> demoStreams[2] = {nullptr, nullptr};
@@ -70,11 +79,25 @@ void CDemoRecorder::WriteDemoFile()
 	// (plus data is not guaranteed to be stored contiguously) ==> the only clean OO solution
 	// that avoids str()'s copy would be to supply our own stringbuffer backend to demoStream
 	// which is slightly overdoing it
-	const std::string data = demoStreams[isServerDemo]->str();
+	//
+	// zlib FAQ claims the lib is thread-safe, "however any library routines that zlib uses and
+	// any application-provided memory allocation routines must also be thread-safe. zlib's gz*
+	// functions use stdio library routines, and most of zlib's functions use the library memory
+	// allocation routines by default" (should be OK)
+	std::string data = std::move(demoStreams[isServerDemo]->str());
+	std::function<void(gzFile, std::string&&)> func = [](gzFile file, std::string&& data) {
+		gzwrite(file, data.c_str(), data.size());
+		gzflush(file, Z_FINISH);
+		gzclose(file);
+	};
 
-	gzwrite(file, data.c_str(), data.size());
-	gzflush(file, Z_FINISH);
-	gzclose(file);
+	#ifndef WIN32
+	// NOTE: can not use ThreadPool for this directly here, workers are already gone
+	// FIXME: does not currently (august 2017) compile on Windows mingw buildbots
+	ThreadPool::AddExtJob(spring::thread(std::move(func), file, std::move(data)));
+	#else
+	ThreadPool::AddExtJob(std::move(std::async(std::launch::async, std::move(func), file, std::move(data))));
+	#endif
 }
 
 void CDemoRecorder::WriteSetupText(const std::string& text)

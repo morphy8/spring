@@ -66,7 +66,10 @@ public:
 	static const int2* GetDirectionVectorsTable();
 
 protected: // IPathFinder impl
+	IPath::SearchResult DoBlockSearch(const CSolidObject* owner, const MoveDef& moveDef, const int2 s, const int2 g);
+	IPath::SearchResult DoBlockSearch(const CSolidObject* owner, const MoveDef& moveDef, const float3 sw, const float3 gw);
 	IPath::SearchResult DoSearch(const MoveDef&, const CPathFinderDef&, const CSolidObject* owner);
+
 	bool TestBlock(
 		const MoveDef& moveDef,
 		const CPathFinderDef& pfDef,
@@ -103,9 +106,9 @@ private:
 	void CalculateBlockOffsets(unsigned int, unsigned int);
 	void EstimatePathCosts(unsigned int, unsigned int);
 
-	int2 FindOffset(const MoveDef&, unsigned int, unsigned int) const;
-	void CalculateVertices(const MoveDef&, int2, unsigned int threadNum = 0);
-	void CalculateVertex(const MoveDef&, int2, unsigned int, unsigned int threadNum = 0);
+	int2 FindBlockPosOffset(const MoveDef&, unsigned int, unsigned int) const;
+	void CalcVertexPathCosts(const MoveDef&, int2, unsigned int threadNum = 0);
+	void CalcVertexPathCost(const MoveDef&, int2, unsigned int pathDir, unsigned int threadNum = 0);
 
 	bool ReadFile(const std::string& baseFileName, const std::string& mapName);
 	void WriteFile(const std::string& baseFileName, const std::string& mapName);

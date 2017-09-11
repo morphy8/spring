@@ -40,7 +40,7 @@ public:
 	virtual void PitchAdjust(const float newPitch);
 
 	virtual bool Mute();
-	virtual bool IsMuted() const;
+	virtual bool IsMuted() const { return mute; }
 
 	virtual void Iconified(bool state);
 
@@ -57,40 +57,41 @@ private:
 	typedef spring::unordered_map<std::string, SoundItemNameMap> SoundItemDefsMap;
 
 private:
-	void InitThread(int maxSounds);
-	void UpdateThread(int maxSounds);
+	void InitThread(int cfgMaxSounds);
+	void UpdateThread(int cfgMaxSounds);
 
 	void Update();
-	int GetMaxMonoSources(ALCdevice* device, int maxSounds);
 	void UpdateListenerReal();
+
+	int GetMaxMonoSources(ALCdevice* device, int cfgMaxSounds);
+	void GenSources(int alMaxSounds);
 
 	size_t MakeItemFromDef(const SoundItemNameMap& itemDef);
 	size_t LoadSoundBuffer(const std::string& filename);
 
 private:
-	float masterVolume;
-
-	bool mute;
-
-	/// we do not play if minimized / iconified
-	bool appIsIconified;
-	bool pitchAdjust;
-
+	spring::thread soundThread;
 	spring::unordered_map<std::string, size_t> soundMap; // <name, id>
 	std::vector<SoundItem*> soundItems;
 	std::vector<CSoundSource> soundSources; // fixed-size
+
+	SoundItemNameMap defaultItemNameMap;
+	SoundItemDefsMap soundItemDefsMap;
+
+	float masterVolume;
 
 	/// unscaled
 	float3 myPos;
 	float3 camDir;
 	float3 camUp;
 	float3 prevVelocity;
+
 	bool listenerNeedsUpdate;
+	bool mute;
 
-	SoundItemNameMap defaultItemNameMap;
-	SoundItemDefsMap soundItemDefsMap;
-
-	spring::thread* soundThread;
+	/// we do not play if minimized / iconified
+	bool appIsIconified;
+	bool pitchAdjust;
 
 	volatile bool soundThreadQuit;
 	volatile bool canLoadDefs;

@@ -5,6 +5,7 @@
 
 #ifndef THREADPOOL
 #include  <functional>
+#include "System/Threading/SpringThreading.h"
 
 namespace ThreadPool {
 	template<class F, class... Args>
@@ -12,6 +13,10 @@ namespace ThreadPool {
 	{
 		f(args ...);
 	}
+
+	static inline void AddExtJob(spring::thread&& t) { t.join(); }
+	static inline void AddExtJob(std::future<void>&& f) { f.get(); }
+	static inline void ClearExtJobs() {}
 
 	static inline void SetMaximumThreadCount() {}
 	static inline void SetDefaultThreadCount() {}
@@ -33,12 +38,10 @@ static inline void for_mt(int start, int end, int step, const std::function<void
 	}
 }
 
-
 static inline void for_mt(int start, int end, const std::function<void(const int i)>&& f)
 {
 	for_mt(start, end, 1, std::move(f));
 }
-
 
 static inline void for_mt2(int start, int end, unsigned worksize, const std::function<void(const int i)>&& f)
 {
@@ -50,7 +53,6 @@ static inline void parallel(const std::function<void()>&& f)
 {
 	f();
 }
-
 
 template<class F, class G>
 static inline auto parallel_reduce(F&& f, G&& g) -> typename std::result_of<F()>::type
@@ -82,6 +84,10 @@ namespace ThreadPool {
 	template<class F, class... Args>
 	static auto Enqueue(F&& f, Args&&... args)
 	-> std::shared_ptr<std::future<typename std::result_of<F(Args...)>::type>>;
+
+	void AddExtJob(spring::thread&& t);
+	void AddExtJob(std::future<void>&& f);
+	void ClearExtJobs();
 
 	void PushTaskGroup(ITaskGroup* taskGroup);
 	void PushTaskGroup(std::shared_ptr<ITaskGroup>&& taskGroup);
@@ -126,25 +132,25 @@ public:
 	uint64_t ExecuteLoop(int tid, bool wffCall) {
 		const spring_time t0 = spring_now();
 
-		// if this is a for-task, execute a *single* slice
-		// and re-insert such that other threads can share
-		// the work (otherwise all slices would be handled
-		// by *one* worker, although in practice this still
-		// occurs since WaitForFinished suffers no latency)
-		if (!wffCall && IsSliceTask() && ExecuteStep()) {
-			ThreadPool::PushTaskGroup(this);
-			return ((spring_now() - t0).toNanoSecsi());
-		}
-
 		while (ExecuteStep());
 
 		const spring_time t1 = spring_now();
 		const spring_time dt = t1 - t0;
 
-		if (!wffCall) {
-			// do not set this from WFF, defeats the purpose
-			assert(inTaskQueue.load());
+		if (IsSliceTask()) {
+			// inTaskQueue would be set to false prematurely by the
+			// first slice to finish, let it be handled by WFF which
+			// blocks until all threads are
+			if (!wffCall)
+				return (dt.toNanoSecsi());
+
 			inTaskQueue.store(false);
+		} else {
+			// do not set this to false from WFF, defeats the purpose
+			if (!wffCall) {
+				assert(inTaskQueue.load());
+				inTaskQueue.store(wffCall);
+			}
 		}
 
 		if (SelfDelete()) {
@@ -178,7 +184,7 @@ public:
 	}
 
 	uint32_t GetId() const { return id; }
-	uint64_t GetDeltaTime(const spring_time t) const { return (t.toNanoSecsi() - ts); }
+	uint64_t GetDeltaTime(const spring_time t) const { return (std::max(ts.load(), uint64_t(t.toNanoSecsi())) - ts); }
 
 	void UpdateId() { id = lastId.fetch_add(1); }
 	void SetTimeStamp(const spring_time t) { ts = t.toNanoSecsi(); }
@@ -203,8 +209,8 @@ public:
 private:
 	static std::atomic_uint lastId;
 
-	uint32_t id;
-	uint64_t ts; // timestamp (ns)
+	std::atomic<uint32_t> id;
+	std::atomic<uint64_t> ts; // timestamp (ns)
 };
 
 
@@ -517,7 +523,10 @@ public:
 		if (!isFinished)
 			return true;
 
+		// P2TG's are never actually in the queue, let WFF terminate
+		inTaskQueue.store(false);
 		remainingTasks.store(0);
+
 		childTasks.clear();
 		return false;
 	}
@@ -690,8 +699,19 @@ static inline void for_mt(int start, int end, int step, F&& f)
 
 	assert(taskGroup->IsInJobQueue());
 
-	ThreadPool::PushTaskGroup(taskGroup); // note: ForTask re-queues itself for each slice
-	ThreadPool::WaitForFinished(taskGroup); // make calling thread also run ExecuteLoop
+	#if 0
+	ThreadPool::PushTaskGroup(taskGroup);
+	#else
+	// store the group in all worker queues s.t. each executes a slice
+	for (size_t i = 1; i < ThreadPool::GetNumThreads(); ++i) {
+		taskGroup->wantedThread.store(i);
+		ThreadPool::PushTaskGroup(taskGroup);
+	}
+	#endif
+
+	// make calling thread also run ExecuteLoop
+	ThreadPool::WaitForFinished(taskGroup);
+
 }
 
 template <typename F>
