@@ -15,6 +15,7 @@ SET(sources_engine_Map
 		"${CMAKE_CURRENT_SOURCE_DIR}/ReadMap.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/Generation/MapGenerator.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/Generation/SimpleMapGenerator.cpp"
+		"${CMAKE_CURRENT_SOURCE_DIR}/Generation/LuaMapGenerator.cpp"
 #		"${CMAKE_CURRENT_SOURCE_DIR}/SM3/Frustum.cpp"
 #		"${CMAKE_CURRENT_SOURCE_DIR}/SM3/Plane.cpp"
 #		"${CMAKE_CURRENT_SOURCE_DIR}/SM3/SM3GroundDrawer.cpp"
